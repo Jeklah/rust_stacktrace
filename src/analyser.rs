@@ -1,68 +1,50 @@
-use std::collections::{HashMap, HashSet};
+use regex::Regex;
+use std::collections::HashMap;
 
-/// Known allocation functions (C/C++ interop or Rust allocations)
-const ALLOCATION_FUNCS: &[&str] = &["malloc", "calloc", "realloc", "new", "operator new"];
-
-/// Known deallocation functions
-const DEALLOCATION_FUNCS: &[&str] = &["free", "delete", "operator delete"];
-
-/// Known memory manipulation functions (potential invalid accesses)
-const MEMORY_ACCESS_FUNCS: &[&str] = &["memcpy", "memmove", "memset", "strcpy", "strncpy"];
-
-
-/// Represents a stack trace with memory addresses.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub enum FaultType {
-    MemoryLeak,
-    PageFault,
+    PageDomainFault,
     SegmentationFault,
+    NullPointerDereference,
+    MemoryLeak,
     Unknown,
 }
 
-/// Analyzee stack trace for memory leaks,  and unhandled exceptions and page faults.
-pub fn analyze_stack_trace(function_calls: &[String], addresses: &[u64]) -> FaultType {
-    let mut allocations = HashMap::new();
-    let mut deallocations = HashSet::new();
-    let mut last_function = function_calls.last().unwrap_or(&"Unknown".to_string());
-    
-
-    // Track memory allocations and deallocations
-    for func in function_calls {
-        if ALLOCATION_FUNCS.iter().any(|&alloc| func.contains(alloc)) {
-            *allocations.entry(func.clone()).or_insert(0) += 1;
-        }
-        if DEALLOCATION_FUNCS.iter().any(|&dealloc| func.contains(dealloc)) {
-            deallocations.insert(func.clone());
+/// Extact faulting address from the stack trace
+fn extract_fault_address(stack_trace: &str) -> Option<u64> {
+    let re = Regex::new(r"Unhandled fault: page domain fault \(.*?\) at (0x[0-9a-fA-F]+)").unwrap();
+    if let Some(captures) = re.captures(stack_trace) {
+        if let Some(addr) = captures.get(1) {
+            return u64::from_str_radix(addr.as_str().trim_start_matches("0x"), 16).ok();
         }
     }
+    None
+}
 
-    // Check for memory leaks
-    let mut leaks_found = false;
-    for (func, count) in allocations_sites {
-        if !deallocations.contains(func){
-            println!("⚠️  Memory leak detected: {} ({} allocations)", func, count);
-            leaks_found = true;
-        }
-    }
+/// Detects memory access violations
+pub fn analyze_stack_trace(stack_trace: &str) -> FaultType {
+    if let Some(fault_address) = extract_fault_address(stack_trace) {
+        println!(
+            "🚨 Detected Unhandled Page Domain Fault at 0x{:x}",
+            fault_address
+        );
 
-    // Check for unhandled page faults
-    if MEMORY_ACCESS_FUNCS.iter().any(|&faulty_func| last_function.contains(faulty_func)) {
-        println!("🚨 Page Domain Fault detected: {}", last_function);
-        return FaultType::PageFault;
-    }
-
-    // Detect Segementation fault (null pointer or access violation)
-    if let Some(&last_addr) = addresses.last() {
-        if last_addr == 0x0 || last_addr > 0xffff_ffff_ffff {
-            println!("💀 Segmentation Fault detected: {:x}", last_addr);
+        // Detect segementation faults or null pointer issues
+        if fault_address == 0x0 {
+            println!("💀 Segmentation Fault: Attempted to access NULL memory.");
             return FaultType::SegmentationFault;
         }
+
+        // Detect use-after-free based on register memory classifcation
+        if stack_trace.contains("non-paged memory") {
+            println!("🛑 Use-after-free detected: Accessed freed memory.");
+            return FaultType::MemoryLeak;
+        }
+
+        return FaultType::PageDomainFault;
     }
 
-    if leaks_found {
-        return FaultType::MemoryLeak;
-    }
-
-    println!("✅ No issues detected");
+    println!("✅ No critical memory issues detected.");
     FaultType::Unknown
 }
+
