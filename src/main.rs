@@ -1,17 +1,16 @@
+mod analyser;
 mod parser;
-mod symbol_resolver;
 
 fn main() {
     let stack_dump_file = "stack_dump.txt";
-    let binary_file = "my_program";
 
     match parser::parse_stack_dump(stack_dump_file) {
-        Ok(addresses) => {
-            println!("Resolved stack addresses:");
-            symbol_resolve::resolve_symbols(binary_file, &addresses);
+        Ok(stack_trace) => {
+            println!("🔍 Analyzing stack trace...");
+            let fault_type = analyser::analyze_stack_trace(&stack_trace);
+            println!("\nCrash Analysis Result: {:?}", fault_type);
         }
-        Err(err) => {
-            eprintln!("Error reading stack dump: {}", err);
-        }
+        Err(err) => eprintln!("❌ Error reading stack dump: {}", err),
     }
 }
+
