@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 addr2line = "0.24.2"
+regex = "1.11.1"
